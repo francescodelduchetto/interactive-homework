@@ -17,10 +17,6 @@
     //
     varying vec3 vPosition;
     varying vec3 unitNormal;
-    //~ varying vec3 u_LightPosition;
-    //~ varying vec3 u_AmbientLight;
-    //~ varying vec3 u_LightColor;
-    //~ varying vec3 u_SpecularLight;
     //
      void main() {
         
@@ -29,7 +25,7 @@
         gl_Position = projection * transformedVertex;
         unitNormal = normalize(normalMatrix * normal);
         
-        float multiplier = 1.0;// abs(unitNormal.z);
+        float multiplier = 1.0;
         
         vColor = vec4(multiplier * color.r,
                       multiplier * color.g,
