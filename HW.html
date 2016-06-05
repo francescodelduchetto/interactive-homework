@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>HomeWork#1</title>
+
+<script type="x-shader/x-vertex" id="vshader">
+
+    attribute vec3 coords;
+    uniform mat4 modelview;
+    uniform mat4 projection;
+    attribute vec3 normal;
+    uniform mat3 normalMatrix;
+    uniform vec4 color;
+    varying vec4 vColor;
+     
+    //
+    varying vec3 vPosition;
+    varying vec3 unitNormal;
+    //~ varying vec3 u_LightPosition;
+    //~ varying vec3 u_AmbientLight;
+    //~ varying vec3 u_LightColor;
+    //~ varying vec3 u_SpecularLight;
+    //
+     void main() {
+        
+        vec4 coords = vec4(coords,1.0);
+        vec4 transformedVertex = modelview * coords;
+        gl_Position = projection * transformedVertex;
+        unitNormal = normalize(normalMatrix * normal);
+        
+        float multiplier = 1.0;// abs(unitNormal.z);
+        
+        vColor = vec4(multiplier * color.r,
+                      multiplier * color.g,
+                      multiplier * color.b,
+                                   color.a);
+        vPosition = vec3(transformedVertex);
+     }
+</script>
+<script type="x-shader/x-fragment" id="fshader">
+    precision mediump float;
+    varying vec4 vColor;
+     
+    //
+    varying vec3 unitNormal;
+    varying vec3 vPosition;
+    uniform vec3 u_SunPos;
+    uniform vec3 u_Light1Pos;
+    uniform vec3 u_Light2Pos;
+    uniform vec3 u_AmbientLight;
+    uniform vec3 u_SpecularLight;
+    uniform vec3 u_DiffuseLight;
+    //
+    
+    void main() {
+        vec3 normal = normalize(unitNormal);
+        vec3 viewDir = normalize(-vPosition);
+        
+        vec4 sunIntensity = vec4(1, 1, 0.2, 1);
+        vec4 lightIntensity = vec4(0.45, 0.45, 0.5, 1);
+        
+        // Sun light
+        vec3 sunDir = normalize(u_SunPos);
+        vec3 refDir = reflect(-sunDir, normal);
+        float nDotL = max(dot(sunDir, normal), 0.0);
+        vec3 diffuse = u_DiffuseLight * vColor.rgb * nDotL;
+        vec3 ambient = u_AmbientLight * vColor.rgb;
+        float spec = 0.0;
+        if (nDotL > 0.0) 
+            spec = pow(max(dot(refDir, viewDir), 0.0), 4.0);
+        vec3 specular = spec * u_SpecularLight * vColor.rgb;
+        vec4 FragColor1 = vec4(diffuse + ambient + specular, vColor.a);
+        //~ vec4 FragColor1 = vec4(0,0,0,0);
+        
+        // Bike lights
+        vec3 pointLight1Dir = normalize(u_Light1Pos - vec3(vPosition));
+        vec3 pointLight2Dir = normalize(u_Light2Pos - vec3(vPosition));
+        vec3 refDir1 = reflect(-pointLight1Dir, normal);
+        vec3 refDir2 = reflect(-pointLight2Dir, normal);
+        float nDotL1 = max(dot(pointLight1Dir, normal), 0.0);
+        float nDotL2 = max(dot(pointLight2Dir, normal), 0.0);
+        vec3 diffuse1 = u_DiffuseLight * vColor.rgb * nDotL1;
+        vec3 diffuse2 = u_DiffuseLight * vColor.rgb * nDotL2;
+        vec3 ambient1 = u_AmbientLight * vColor.rgb;
+        
+        float spec1 = 0.0; //
+        if (nDotL1 > 0.0)
+            spec1 = pow(max(dot(refDir1, viewDir), 0.0), 4.0);
+        vec3 specular1 = spec1 * u_SpecularLight * vColor.rgb;
+        float spec2 = 0.0; //
+        if (nDotL2 > 0.0)
+            spec2 = pow(max(dot(refDir2, viewDir), 0.0), 4.0);
+        vec3 specular2 = spec2 * u_SpecularLight * vColor.rgb;
+        
+        //~ vec4 FragColor2 = vec4(diffuse1 + diffuse2 + ambient1, vColor.a);
+        vec4 FragColor2 = vec4(diffuse1 + diffuse2 + ambient1 + specular1 + specular2, vColor.a);
+        
+        // Total light
+        gl_FragColor = (FragColor1 * sunIntensity + FragColor2 * lightIntensity);
+    }
+</script>
+
+
+<script type="text/javascript" src="gl-matrix.js"></script>
+<script type="text/javascript" src="basic-objects.js"></script>
+<script type="text/javascript" src="simple-rotator.js"></script>
+
+<script type="text/javascript">
+
+"use strict";
+
+var gl;   // The webgl context.
+
+var aCoords;           // Location of the coords attribute variable in the shader program.
+var aCoordsBuffer;     // Buffer to hold coords.
+var aNormal;           // Location of the normal uniform in the shader program.
+var aNormalBuffer;     // Buffer to hold normal vectors.
+var indexBuffer;       // Buffer to hold indices for gl.drawElements
+var uColor;            // Location of the color uniform variable in the shader program.
+var uProjection;       // Location of the projection uniform matrix in the shader program.
+var uModelview;        // Location of the modelview unifirm matrix in the shader program.
+var uNormalMatrix;     // Location of the normalMatrix uniform matrix in the shader program.
+
+var projection = mat4.create();   // projection matrix
+var modelview = mat4.create();    // modelview matrix
+var normalMatrix = mat3.create(); // matrix, derived from modelview matrix, for transforming normal vectors
+
+var rotator;   // A SimpleRotator object to enable rotation by mouse dragging.
+
+var frameNumber = 0.0;  // frame number during animation (actually only goes up by 0.5 per frame)
+
+var torus, sphere, cone, cylinder, disk, ring, cube;  // basic objects, created using function createModel
+
+var show = 1;  // When this variable is 1, the entire scene is drawn; when it is 2, only the car is shown
+
+var modelview;                  // The current modelview matrix
+var matrixStack = [];           // A stack of matrices for implementing hierarchical graphics.
+
+var currentColor = [1,1,1,1];   // The current drawing color; objects are rendered using this color.
+
+var uSunPos;
+var uBikeLight1;
+var uBikeLight2;
+
+var light1;
+var light2;
+
+/**
+ * Draws the image, which consists of either the "world" or a closeup of the "car".
+ */
+function draw() {
+    gl.clearColor(0,0,0,1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    
+    mat4.perspective(projection, Math.PI/4, 1, 1, 50);			//assigns to the matrix projection the transformation with frustum
+																//defined by an eye angle of 45 degrees (pi/4), ratio of width/height
+																// of 1, near plane 1 and far plane 50
+    gl.uniformMatrix4fv(uProjection, false, projection );		//assigns the value of the matrix projection to the uniform matrix uProjection
+
+    modelview = rotator.getViewMatrix();						//computes the modelview from the position of the rotator
+    mat3.normalFromMat4(normalMatrix, modelview);				//computes the normalMatrix (used to multiply the normals) from the modelview
+    
+    if (show == 1)
+        world();
+    else
+       car();
+}
+
+/**
+ * Draws a "world" consisting of a disk holding some trees and a road, and a car that
+ * drives along the road.  A tree in the middle grows from frame 0 to frame 1000.
+ */
+function world() {
+	pushMatrix();													//creates a copy of the current top matrix of the matrix stack
+	mat4.translate(modelview,modelview,[0,-.01,0]);				//modifies the second parameter (modelview) by multiplying it with
+																	//the translation matrix with parameters [0,-0.05,0] and assigns the result
+																	//to the first parameter. In this case, it modifies the modelview.
+	mat4.rotate(modelview,modelview,(90)/180*Math.PI,[1,0,0]);		//modifies the second parameter (modelview) by multiplying it with
+																	//the rotation matrix with parameters (90)/180*Math.PI (angle of 90 degrees) and
+																	//[1,0,0] (axis of rotation) and assigns the result
+																	//to the first parameter. In this case, it modifies the modelview.
+	currentColor = [0.1,0.4,0.1,1];									//Defines the color
+	disk.render();													//Renders the disk
+	popMatrix();													//deletes the top matrix of the stack
+	pushMatrix();
+	currentColor = [0.7,0.7,0.8,1];
+	mat4.rotate(modelview,modelview,(90)/180*Math.PI,[1,0,0]);
+	ring.render();
+	popMatrix();
+	pushMatrix();
+    currentColor = [0.6, .3, .05, 1];
+    mat4.rotate(modelview, modelview, -frameNumber/20, [0, 1, 0]);   // motion
+	mat4.translate(modelview, modelview, [0, 0, 3.6]);
+    light1 = vec4.fromValues(-0.8, 1, 0.0, 1.0);
+    mat4.multiply(light1, modelview, light1); // light motion
+	bicycle();
+	popMatrix();
+    pushMatrix();
+    currentColor = [0.1, .3, .6, 1];
+    mat4.rotate(modelview, modelview, -frameNumber/25, [0, 1, 0]);   // motion
+	mat4.translate(modelview, modelview, [0, 0, 4.4]);
+    mat4.scale(modelview, modelview, [0.8, 0.8, 0.8]);
+    light2 = vec4.fromValues(-0.8, 1, 0.0, 1.0);
+    mat4.multiply(light2, modelview, light2); // light motion
+	bicycle();
+	popMatrix();
+	pushMatrix();
+	tree();
+    popMatrix();
+    pushMatrix();
+    mat4.translate(modelview, modelview, [2, 0, 1]);
+    tree();
+	popMatrix();
+    pushMatrix();
+    mat4.translate(modelview, modelview, [-1.5, 0, 1.5]);
+    tree();
+	popMatrix();
+    pushMatrix();
+    mat4.translate(modelview, modelview, [2, 0, -1]);
+    tree();
+	popMatrix();
+}
+
+/**
+ * Draws a tree consisting of a green cone with a brown cylinder for a trunk.
+ */
+function tree() {
+    pushMatrix();
+        mat4.scale(modelview, modelview, [1.3, 1.5, 1.3]);
+        pushMatrix();
+            currentColor = [0.5,0.3,0.1,1];
+            mat4.scale(modelview, modelview, [0.5, 1, 0.5]);
+            mat4.rotate(modelview, modelview, (90)/180*Math.PI, [-1, 0, 0]);
+            cylinder.render();
+        popMatrix();
+        pushMatrix();
+            mat4.translate(modelview, modelview, [0, 1, 0]);
+            mat4.rotate(modelview, modelview, (90)/180*Math.PI, [-1, 0, 0]);
+            mat4.scale(modelview, modelview, [1.5, 1.5, 1.5]);
+            currentColor = [0,0.8,0,1];
+            cone.render();
+        popMatrix();
+    popMatrix();
+}
+
+/**
+ * Draws a bicycle consisting of a (simplified) body, two wheels 
+ * and a light positioned in front.
+ */
+function bicycle() {
+    pushMatrix();
+    mat4.rotate(modelview, modelview, 90/180*Math.PI, [0, 1, 0]);
+        
+        body();
+        
+        // Pedals
+        pushMatrix();
+        currentColor = [0.2, .2, .2, 1];
+            mat4. translate(modelview, modelview, [0, 0.4, -0.05]);
+            // Pedal 1
+            pushMatrix();
+            mat4.translate(modelview, modelview, [.05, 0, 0]);
+            mat4.rotate(modelview, modelview, -frameNumber/10, [1, 0, 0]);  // motion
+            pushMatrix();
+            mat4.scale(modelview, modelview, [1, 1, .25]);
+            tube();
+            popMatrix();
+            pushMatrix();
+            mat4.translate(modelview, modelview, [0.07, 0, 0.18]);
+            mat4.rotate(modelview, modelview, (frameNumber/10-90/180*Math.PI), [1, 0, 0]);
+            pedal();
+            popMatrix();
+            popMatrix();
+            
+            // Pedal 2
+            pushMatrix();
+            mat4.translate(modelview, modelview, [-.05, 0, 0]);
+            mat4.rotate(modelview, modelview, -frameNumber/10, [1, 0, 0]);  // motion
+            mat4.rotate(modelview, modelview, Math.PI, [0, 1, 0]);
+            pushMatrix();
+            mat4.scale(modelview, modelview, [1, 1, .25]);
+            tube();
+            popMatrix();
+            pushMatrix();
+            mat4.translate(modelview, modelview, [0.07, 0, 0.18]);
+            mat4.rotate(modelview, modelview, -(frameNumber/10-90/180*Math.PI), [1, 0, 0]);
+            pedal();
+            popMatrix();
+            popMatrix();
+        popMatrix();
+        
+        pushMatrix();
+            mat4.scale(modelview, modelview, [0.4, 0.4, 0.4]);
+            mat4.translate(modelview, modelview, [0, 1, 1.5]);
+            mat4.rotate(modelview, modelview, -frameNumber/5, [1, 0, 0]);   // motion
+            mat4.rotate(modelview, modelview, 90/180*Math.PI, [0, 0, 1]);
+            wheel();
+        popMatrix();
+        
+        pushMatrix();
+            mat4.scale(modelview, modelview, [0.4, 0.4, 0.4]);
+            mat4.translate(modelview, modelview, [0, 1, -1.5]);
+            mat4.rotate(modelview, modelview, -8/180*Math.PI, [0 ,1, 0]);   // steering
+            mat4.rotate(modelview, modelview, -frameNumber/5, [1, 0, 0]);   // motion
+            mat4.rotate(modelview, modelview, 90/180*Math.PI, [0, 0, 1]);
+            wheel();
+        popMatrix();
+        
+        
+    // Saddle
+    saddle();
+    
+    light();
+    
+    popMatrix();
+}
+
+function light() {
+    currentColor = [1, 1, 0.5, 1];
+    popMatrix();
+        mat4.translate(modelview, modelview, [-0.5, 0.92, 0]);
+        mat4.rotate(modelview, modelview, 90/180*Math.PI, [0, 1, 0]);
+        mat4.scale(modelview, modelview, [0.01, 0.01, 0.1]);
+        disk.render()
+    pushMatrix();
+}
+
+function saddle() {
+    currentColor = [0,0,0,1];
+    pushMatrix();
+        mat4.translate(modelview, modelview, [0, .98, .35]);
+        mat4.scale(modelview, modelview, [.12, .03, .09]);
+        sphere.render();
+    popMatrix();
+    pushMatrix();
+        mat4.translate(modelview, modelview, [0, .97, .25]);
+        mat4.scale(modelview, modelview, [.05, .02, .1]);
+        sphere.render();
+    popMatrix();
+}
+
+/**
+ * Draw a rotating wheel that consists of a torus to make the wheel.
+ */
+function wheel() {
+    pushMatrix();
+    currentColor = [0.11, 0.1, 0.1, 1];
+    mat4.rotate(modelview,modelview,(90)/180*Math.PI,[1,0,0]);
+    torus.render();
+    popMatrix();
+    
+    var n = 18;
+    for (var i=0; i<n; i++) {
+        pushMatrix();
+        currentColor = [0.4, 0.4, 0.4, 1];
+        mat4.rotate(modelview, modelview, 90/180*Math.PI, [0, 0, 1]);
+        mat4.rotate(modelview, modelview, (360/n)*i/180*Math.PI, [1, 0, 0]);
+        mat4.scale(modelview, modelview, [1, 1, 1.2]);
+        tube();
+        popMatrix();
+    }
+}
+
+function body() {
+    pushMatrix();
+    mat4.translate(modelview, modelview, [0, 0.9, -0.4]);
+    tube();
+    popMatrix();
+    pushMatrix();
+    mat4.translate(modelview, modelview, [0, 0.9, 0.3]);
+    mat4.rotate(modelview, modelview, 60/180*Math.PI,[1, 0, 0]);
+    mat4.scale(modelview, modelview, [1, 1, 0.9]);
+    tube();
+    popMatrix();
+    pushMatrix();
+    mat4.translate(modelview, modelview, [0, 0.35, -0.6]);
+    mat4.rotate(modelview, modelview, 70/180*Math.PI,[-1, 0, 0]);
+    mat4.scale(modelview, modelview, [1, 1, 1]);
+    tube();
+    popMatrix();
+    pushMatrix();
+    mat4.translate(modelview, modelview, [0, 0.9, -0.4]);
+    mat4.rotate(modelview, modelview, 55/180*Math.PI,[1, 0, 0]);
+    mat4.scale(modelview, modelview, [1, 1, 0.9]);
+    tube();
+    popMatrix();
+    pushMatrix();
+    mat4.translate(modelview, modelview, [0, 0.4, -0.05]);
+    mat4.rotate(modelview, modelview, 55/180*Math.PI,[-1, 0, 0]);
+    mat4.scale(modelview, modelview, [1, 1, 1]);
+    tube();
+    popMatrix();
+    pushMatrix();
+    mat4.scale(modelview, modelview, [0.8, 1, 1]);
+    mat4.translate(modelview, modelview, [-0.35, 1, -0.35]);
+    mat4.rotate(modelview, modelview, 90/180*Math.PI, [0, 1, 0]);
+    tube();
+    popMatrix();
+}
+
+function pedal() {
+    pushMatrix();
+    mat4.scale(modelview, modelview, [0.15, 0.1, 0.04]);
+    cube.render();
+    popMatrix();
+}
+
+function tube() {
+    pushMatrix();
+    mat4.scale(modelview, modelview, [0.05, 0.05, 0.7]);
+    cylinder.render();
+    popMatrix();
+}
+
+/**
+ *  Push a copy of the current modelview matrix onto the matrix stack.
+ */
+function pushMatrix() {
+    matrixStack.push( mat4.clone(modelview) );
+}
+
+/**
+ *  Restore the modelview matrix to a value popped from the matrix stack.
+ */
+function popMatrix() {
+    modelview = matrixStack.pop();
+}
+
+
+/**
+ *  Create one of the basic objects.  The modelData holds the data for
+ *  an IFS using the structure from basic-objects-IFS.js.  This function
+ *  creates VBOs to hold the coordinates, normal vectors, and indices
+ *  from the IFS, and it loads the data into those buffers.  The function
+ *  creates a new object whose properties are the identifies of the
+ *  VBOs.  The new object also has a function, render(), that can be called to
+ *  render the object, using all the data from the buffers.  That object
+ *  is returned as the value of the function.  (The second parameter,
+ *  xtraTranslate, is there because this program was ported from a Java
+ *  version where cylinders were created in a different position, with
+ *  the base on the xy-plane instead of with their center at the origin.
+ *  The xtraTranslate parameter is a 3-vector that is applied as a
+ *  translation to the rendered object.  It is used to move the cylinders
+ *  into the position expected by the code that was ported from Java.)
+ */
+function createModel(modelData, xtraTranslate) {
+    var model = {};
+    model.coordsBuffer = gl.createBuffer();
+    model.normalBuffer = gl.createBuffer();
+    model.indexBuffer = gl.createBuffer();
+    model.count = modelData.indices.length;
+    if (xtraTranslate)
+        model.xtraTranslate = xtraTranslate;
+    else
+        model.xtraTranslate = null;
+    gl.bindBuffer(gl.ARRAY_BUFFER, model.coordsBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, modelData.vertexPositions, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, model.normalBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, modelData.vertexNormals, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, modelData.indices, gl.STATIC_DRAW);
+    model.render = function() {  // This function will render the object.
+           // Since the buffer from which we are taking the coordinates and normals
+	   // change each time an object is drawn, we have to use gl.vertexAttribPointer
+	   // to specify the location of the data. And to do that, we must first
+	   // bind the buffer that contains the data.  Similarly, we have to
+	   // bind this object's index buffer before calling gl.drawElements.
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.coordsBuffer);
+        gl.vertexAttribPointer(aCoords, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.normalBuffer);
+        gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 0, 0);
+        gl.uniform4fv(uColor, currentColor);
+        if (this.xtraTranslate) {
+            pushMatrix();
+            mat4.translate(modelview,modelview,this.xtraTranslate);
+        }
+        gl.uniformMatrix4fv(uModelview, false, modelview );
+        mat3.normalFromMat4(normalMatrix, modelview);
+         //~ console.log(normalMatrix);
+        gl.uniformMatrix3fv(uNormalMatrix, false, normalMatrix);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+        gl.drawElements(gl.TRIANGLES, this.count, gl.UNSIGNED_SHORT, 0);
+        if (this.xtraTranslate) {
+            popMatrix();
+        }
+    }
+    return model;
+}
+
+
+
+/* Creates a program for use in the WebGL context gl, and returns the
+ * identifier for that program.  If an error occurs while compiling or
+ * linking the program, an exception of type String is thrown.  The error
+ * string contains the compilation or linking error.  If no error occurs,
+ * the program identifier is the return value of the function.
+ */
+function createProgram(gl, vertexShaderSource, fragmentShaderSource) {
+   var vsh = gl.createShader( gl.VERTEX_SHADER );
+   gl.shaderSource(vsh,vertexShaderSource);
+   gl.compileShader(vsh);
+   if ( ! gl.getShaderParameter(vsh, gl.COMPILE_STATUS) ) {
+      throw "Error in vertex shader:  " + gl.getShaderInfoLog(vsh);
+   }
+   var fsh = gl.createShader( gl.FRAGMENT_SHADER );
+   gl.shaderSource(fsh, fragmentShaderSource);
+   gl.compileShader(fsh);
+   if ( ! gl.getShaderParameter(fsh, gl.COMPILE_STATUS) ) {
+      throw "Error in fragment shader:  " + gl.getShaderInfoLog(fsh);
+   }
+   var prog = gl.createProgram();
+   gl.attachShader(prog,vsh);
+   gl.attachShader(prog, fsh);
+   gl.linkProgram(prog);
+   if ( ! gl.getProgramParameter( prog, gl.LINK_STATUS) ) {
+      throw "Link error in program:  " + gl.getProgramInfoLog(prog);
+   }
+   return prog;
+}
+
+
+/* Gets the text content of an HTML element.  This is used
+ * to get the shader source from the script elements that contain
+ * it.  The parameter should be the id of the script element.
+ */
+function getTextContent( elementID ) {
+    var element = document.getElementById(elementID);
+    var fsource = "";
+    var node = element.firstChild;
+    var str = "";
+    while (node) {
+        if (node.nodeType == 3) // this is a text node
+            str += node.textContent;
+        node = node.nextSibling;
+    }
+    return str;
+}
+
+
+//--------------------------------- animation framework ------------------------------
+
+window.requestAnimationFrame = 
+    window.requestAnimationFrame ||
+    window.mozRequestAnimationFrame ||
+    window.webkitRequestAnimationFrame ||
+    window.msRequestAnimationFrame ||
+    window.oRequestAnimationFrame ||
+    function (callback) {
+        setTimeout(function() { callback(Date.now()); },  1000/60);
+    }
+    
+var animating = false;
+
+function frame() {
+    if (animating) {
+        frameNumber += 0.5;
+        var sunSpeed = 0.01;
+        
+        gl.uniform3f(uSunPos, Math.cos(frameNumber * sunSpeed), 0, Math.sin(frameNumber * sunSpeed));// Math.cos(frameNumber * sunSpeed));
+        
+		gl.uniform3f(uBikeLight1, light1[0], light1[1], light1[2]);//
+		gl.uniform3f(uBikeLight2, light2[0], light2[1], light2[2]);//
+        
+        draw();
+        requestAnimationFrame(frame);
+    }
+}
+
+function setAnimating(run) {
+    if (run != animating) {
+        animating = run;
+        if (animating)
+            requestAnimationFrame(frame);
+    }
+}
+
+//-------------------------------------------------------------------------
+
+function init() {
+   try {
+        var canvas = document.getElementById("glcanvas");
+        gl = canvas.getContext("webgl");
+        if ( ! gl ) {
+            gl = canvas.getContext("experimental-webgl");
+        }
+        if ( ! gl ) {
+            throw "Could not create WebGL context.";
+        }
+        var vertexShaderSource = getTextContent("vshader"); 
+        var fragmentShaderSource = getTextContent("fshader");
+        var prog = createProgram(gl,vertexShaderSource,fragmentShaderSource);
+        gl.useProgram(prog);
+        aCoords =  gl.getAttribLocation(prog, "coords");
+        aNormal =  gl.getAttribLocation(prog, "normal");
+        uModelview = gl.getUniformLocation(prog, "modelview");
+        uProjection = gl.getUniformLocation(prog, "projection");
+        uColor =  gl.getUniformLocation(prog, "color");
+        uNormalMatrix =  gl.getUniformLocation(prog, "normalMatrix");
+        gl.enableVertexAttribArray(aCoords);  // won't change after initialization.
+        gl.enableVertexAttribArray(aNormal);  // also won't change.
+        gl.enable(gl.DEPTH_TEST);
+        uSunPos = gl.getUniformLocation(prog, "u_SunPos");
+        uBikeLight1 =  gl.getUniformLocation(prog, "u_Light1Pos");
+        uBikeLight2 =  gl.getUniformLocation(prog, "u_Light2Pos");
+		var uAmbientLight =  gl.getUniformLocation(prog, "u_AmbientLight");
+		var uDiffuseLight = gl.getUniformLocation(prog, "u_DiffuseLight");
+		var uSpecularLight =gl.getUniformLocation(prog, "u_SpecularLight");
+		
+        
+		gl.uniform3f(uDiffuseLight, 1,1,1);
+		gl.uniform3f(uAmbientLight, 0.2, 0.2, 0.2);
+		gl.uniform3f(uSpecularLight, 0.6,
+                                     0.6,
+                                     0.6);
+   }
+   catch (e) {
+      document.getElementById("message").innerHTML =
+           "Could not initialize WebGL: " + e;
+      return;
+   }
+   
+   torus = createModel(uvTorus(1,0.8,16,8));   // Create all the basic objects.
+   sphere = createModel(uvSphere(1));
+   cone = createModel(uvCone(),[0,0,.5]);
+   cylinder = createModel(uvCylinder(),[0,0,.5]);
+   disk = createModel(uvCylinder(5.5,0.5,64),[0,0,.25]);
+   ring = createModel(ring(3.3,4.8,40));
+   cube = createModel(cube());
+
+   rotator = new SimpleRotator(canvas,draw);
+   rotator.setView( [0, 1, 2], [0,1,0], 16);
+   draw();
+    setAnimating(true); // Start animation
+}
+
+
+
+</script>
+</head>
+<body onload="init()" style="background-color:#DDD">
+
+
+
+<p id="message" style="font-weight:bold">Drag your mouse on the model to rotate it.</p>
+
+<p>
+</p>
+
+
+<div>
+
+    <canvas width=800 height=800 id="glcanvas" style="background-color:blue"></canvas>
+
+</div>
+
+
+</body>
+</html>
+
